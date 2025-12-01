@@ -258,7 +258,7 @@ export type Database = {
     }
     Functions: {
       assign_super_admin: {
-        Args: { user_email: string }
+        Args: { p_user_email: string }
         Returns: {
           message: string
           success: boolean
