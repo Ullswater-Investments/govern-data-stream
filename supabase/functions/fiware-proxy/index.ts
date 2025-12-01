@@ -17,6 +17,37 @@ interface FiwareRequest {
 let cachedToken: string | null = null;
 let tokenExpiry: number = 0;
 
+// Mock data for offline development
+const MOCK_DATA = {
+  entities: [
+    {
+      id: 'urn:ngsi-ld:Device:mock-sensor-001',
+      type: 'Device',
+      category: { type: 'Property', value: ['sensor'] },
+      temperature: { type: 'Property', value: 23.5, unitCode: 'CEL' },
+      batteryLevel: { type: 'Property', value: 0.87 },
+      status: { type: 'Property', value: 'online' }
+    },
+    {
+      id: 'urn:ngsi-ld:Vehicle:mock-vehicle-001',
+      type: 'Vehicle',
+      brandName: { type: 'Property', value: 'Volvo' },
+      speed: { type: 'Property', value: 72, unitCode: 'KMH' },
+      cargoWeight: { type: 'Property', value: 1500, unitCode: 'KGM' },
+      location: { 
+        type: 'GeoProperty', 
+        value: { type: 'Point', coordinates: [-3.7038, 40.4168] }
+      }
+    }
+  ],
+  version: {
+    orion: {
+      version: "1.5.0-mock",
+      uptime: "0 d, 0 h, 0 m, 0 s (OFFLINE MODE)"
+    }
+  }
+};
+
 const getAuthToken = async (idmHost: string, user: string, pass: string): Promise<string> => {
   const now = Date.now();
   
@@ -71,14 +102,65 @@ serve(async (req: Request) => {
     const FIWARE_USER = Deno.env.get('FIWARE_USER');
     const FIWARE_PASS = Deno.env.get('FIWARE_PASS');
     const IDM_HOST = Deno.env.get('IDM_HOST');
+    const USE_MOCKS = Deno.env.get('USE_MOCKS') === 'true';
 
+    // OFFLINE MODE: Return mock data
+    if (USE_MOCKS) {
+      console.log('🔧 OFFLINE MODE: Returning mock data');
+      
+      const requestData: FiwareRequest = await req.json();
+      const { path, method = 'GET' } = requestData;
+
+      // Mock version endpoint
+      if (path.includes('/version')) {
+        return new Response(
+          JSON.stringify(MOCK_DATA.version),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      // Mock entities endpoint
+      if (path.includes('/entities') && method === 'GET') {
+        const typeMatch = path.match(/[?&]type=([^&]+)/);
+        let entities = MOCK_DATA.entities;
+        
+        if (typeMatch) {
+          const requestedType = typeMatch[1];
+          entities = entities.filter(e => e.type === requestedType);
+        }
+
+        return new Response(
+          JSON.stringify(entities),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      // Mock POST (entity creation)
+      if (method === 'POST') {
+        return new Response(
+          JSON.stringify({ success: true, message: 'Mock entity created' }),
+          { 
+            status: 201,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+          }
+        );
+      }
+
+      // Default mock response
+      return new Response(
+        JSON.stringify({ success: true, mode: 'offline', data: [] }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // PRODUCTION MODE: Real FIWARE connection
     if (!FIWARE_HOST) {
       console.warn('FIWARE_HOST not configured - proxy in standby mode');
       return new Response(
         JSON.stringify({ 
           error: 'FIWARE backend not configured',
           status: 'standby',
-          message: 'Configure FIWARE_HOST in Supabase secrets to enable data space connectivity'
+          message: 'Configure FIWARE_HOST in Supabase secrets to enable data space connectivity. Set USE_MOCKS=true for offline development.'
         }),
         {
           status: 503,
@@ -147,7 +229,8 @@ serve(async (req: Request) => {
       JSON.stringify({ 
         error: errorMessage,
         type: 'proxy_error',
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        tip: 'Set USE_MOCKS=true in secrets for offline development'
       }),
       {
         status: 500,
@@ -156,3 +239,4 @@ serve(async (req: Request) => {
     );
   }
 });
+
