@@ -4,6 +4,59 @@
 
 **URL**: https://lovable.dev/projects/30003625-5c07-4d59-864e-278d2db791dc
 
+## 🚀 Quick Start (Developers)
+
+### Prerequisites
+- Docker & Docker Compose
+- `jq` installed (`sudo apt install jq` or `brew install jq`)
+- Node.js 18+ (for frontend)
+
+### Backend Setup (FIWARE Stack)
+
+1. **Start Docker containers:**
+   ```bash
+   docker-compose up -d
+   ```
+
+2. **Run automated setup script:**
+   ```bash
+   chmod +x setup_dev_env.sh
+   ./setup_dev_env.sh
+   ```
+   
+   This script will:
+   - Configure Keyrock (OAuth2 Identity Manager)
+   - Create service users and applications
+   - Inject test data into Orion-LD Context Broker
+   - Generate `.env.dev` with credentials
+
+3. **Configure Supabase Edge Function:**
+   - Open the generated `.env.dev` file
+   - Copy the values to your Supabase project secrets:
+     - `IDM_HOST`, `FIWARE_USER`, `FIWARE_PASS`, `FIWARE_HOST`
+
+4. **(Optional) Expose local Docker to Lovable Cloud:**
+   
+   If developing with Lovable (cloud) and Docker running locally:
+   ```bash
+   ngrok http 1027
+   ```
+   
+   Update `FIWARE_HOST` in Supabase with the ngrok URL.
+
+### Frontend Development
+
+```bash
+npm install
+npm run dev
+```
+
+**Important:** The frontend communicates with FIWARE **only** through the `fiware-proxy` Edge Function. Never make direct HTTP requests to FIWARE components.
+
+See [DEVELOPER_GUIDE.md](./DEVELOPER_GUIDE.md) for detailed API documentation.
+
+---
+
 ## How can I edit this code?
 
 There are several ways of editing your application.

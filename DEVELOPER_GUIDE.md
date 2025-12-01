@@ -5,6 +5,59 @@ Este documento es tu referencia técnica para desarrollar funcionalidades que co
 
 ---
 
+## 0. Configuración Rápida del Entorno de Desarrollo
+
+### 🚀 Setup en 3 Minutos
+
+**Prerequisitos:**
+- Docker y Docker Compose instalados
+- `jq` instalado (`sudo apt install jq` o `brew install jq`)
+- (Opcional) Ngrok para desarrollo remoto desde Lovable
+
+**Pasos:**
+
+1. **Levantar el backend FIWARE:**
+   ```bash
+   docker-compose up -d
+   ```
+
+2. **Ejecutar script de inicialización automática:**
+   ```bash
+   chmod +x setup_dev_env.sh
+   ./setup_dev_env.sh
+   ```
+   
+   Este script automatiza:
+   - Creación de aplicación OAuth2 en Keyrock
+   - Generación de Client ID y Secret
+   - Creación de usuarios de servicio (PEP Proxy)
+   - Inyección de datos de prueba en Orion-LD (4 entidades: Vehículo, Sensor, Data Asset, Policy)
+
+3. **Configurar variables en Supabase:**
+   - Abre el archivo `.env.dev` generado
+   - Copia los valores a tu Edge Function `fiware-proxy` en Supabase:
+     - `IDM_HOST` → Variable de entorno en Supabase
+     - `FIWARE_USER` → Credencial de Keyrock
+     - `FIWARE_PASS` → Contraseña de Keyrock
+
+4. **(Opcional) Exponer Docker local a Lovable con Ngrok:**
+   
+   Si estás desarrollando en Lovable (nube) y tu Docker corre en local, usa un túnel:
+   
+   ```bash
+   # Exponer el puerto del PEP Proxy (1027)
+   ngrok http 1027
+   ```
+   
+   Luego, actualiza la variable `FIWARE_HOST` en Supabase con la URL generada:
+   ```
+   FIWARE_HOST=https://a1b2c3d4.ngrok-free.app
+   ```
+
+   **Importante:** Ngrok es solo para desarrollo. En producción, usa un VPS con dominio real.
+
+---
+
 ## 🏗️ 1. Arquitectura de Conexión: El Patrón Proxy
 
 ### ⚠️ Regla de Oro: **NUNCA** hacer `fetch` directo a FIWARE
@@ -284,6 +337,75 @@ const { data } = await supabase.functions.invoke('fiware-proxy', {
 ```
 
 **Tú solo llamas al proxy. El resto es magia. ✨**
+
+---
+
+### 3.4 Simplificar Entidades con el Adapter Pattern
+
+**Problema:** FIWARE devuelve estructuras complejas NGSI-LD que dificultan el trabajo en componentes React.
+
+**Solución:** Usa las funciones adapter de `src/utils/ngsiAdapters.ts` para convertir automáticamente las entidades complejas en objetos JSON planos.
+
+#### Ejemplo: Mostrar temperatura de un sensor
+
+```typescript
+import { fiwareApi } from '@/services/fiwareApi';
+import { simplifyEntity } from '@/utils/ngsiAdapters';
+
+// ❌ DIFÍCIL: Trabajar con la estructura cruda
+const response = await fiwareApi.getEntity('urn:ngsi-ld:Device:sensor-001');
+const temperature = response.data?.temperature?.value; // Anidamiento complejo
+
+// ✅ FÁCIL: Usar el adapter
+const entity = simplifyEntity(response.data!);
+const temperature = entity.temperature; // Acceso directo
+```
+
+#### Funciones Disponibles en `ngsiAdapters.ts`
+
+| Función | Descripción | Uso |
+|---------|-------------|-----|
+| `simplifyEntity(entity)` | Convierte 1 entidad NGSI-LD en objeto plano | Para detalles de una entidad |
+| `simplifyEntities(array)` | Convierte array de entidades | Para listas/tablas |
+| `toNgsiEntity(data, type, id?)` | Convierte objeto plano a NGSI-LD | Para crear/actualizar entidades |
+| `extractValue(prop, default)` | Extrae valor de Property con fallback | Para casos edge |
+| `formatEntityId(urn)` | Extrae ID legible del URN | Para mostrar en UI |
+
+#### Ejemplo Completo: Lista de Dispositivos IoT
+
+```typescript
+import { useQuery } from '@tanstack/react-query';
+import { fiwareApi } from '@/services/fiwareApi';
+import { simplifyEntities } from '@/utils/ngsiAdapters';
+import { Card } from '@/components/ui/card';
+
+export const DeviceList = () => {
+  const { data: devices } = useQuery({
+    queryKey: ['devices'],
+    queryFn: async () => {
+      const response = await fiwareApi.getDevices();
+      // Convertir todas las entidades a formato simple
+      return simplifyEntities(response.data || []);
+    }
+  });
+
+  return (
+    <div className="grid gap-4">
+      {devices?.map(device => (
+        <Card key={device.id} className="p-4">
+          <h3>{device.id}</h3>
+          {/* Acceso directo a propiedades simples */}
+          <p>Temperatura: {device.temperature}°C</p>
+          <p>Batería: {device.batteryLevel * 100}%</p>
+          <p>Estado: {device.status}</p>
+        </Card>
+      ))}
+    </div>
+  );
+};
+```
+
+**Ventaja:** Los componentes de UI de `/examples` pueden trabajar directamente con estos datos sin modificaciones.
 
 ---
 
