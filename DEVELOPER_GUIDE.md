@@ -12,11 +12,26 @@ Este documento es tu referencia técnica para desarrollar funcionalidades que co
 ```typescript
 // ❌ INCORRECTO - Esto causará errores CORS y expondrá credenciales
 const response = await fetch('http://orion:1026/ngsi-ld/v1/entities');
+const response = await fetch('http://tu-servidor:1027/ngsi-ld/v1/entities');
 
-// ✅ CORRECTO - Usa el proxy seguro de Supabase
+// ✅ CORRECTO - Usa el proxy seguro de Supabase Edge Function
 const { data } = await supabase.functions.invoke('fiware-proxy', {
-  body: { path: '/ngsi-ld/v1/entities', method: 'GET' }
+  body: { 
+    path: '/ngsi-ld/v1/entities', 
+    method: 'GET' 
+  }
 });
+```
+
+**Firma de la Edge Function `fiware-proxy`:**
+
+```typescript
+interface ProxyRequest {
+  path: string;        // Ruta relativa (ej: '/ngsi-ld/v1/entities')
+  method: string;      // GET, POST, PUT, DELETE, PATCH
+  body?: object;       // Payload para POST/PUT/PATCH (opcional)
+  skipAuth?: boolean;  // true para endpoints públicos como /version
+}
 ```
 
 ### ¿Por qué el Proxy es Obligatorio?
@@ -28,17 +43,40 @@ const { data } = await supabase.functions.invoke('fiware-proxy', {
 
 ### Flujo de Autenticación (Transparente para ti)
 
+El frontend **nunca maneja credenciales de FIWARE directamente**. La autenticación funciona así:
+
+1. **Frontend**: El usuario inicia sesión en la aplicación usando Supabase Auth (email/password).
+2. **Proxy (Edge Function)**: Cuando haces `supabase.functions.invoke('fiware-proxy')`, el proxy:
+   - Usa las credenciales almacenadas en secrets (`FIWARE_USER`, `FIWARE_PASS`)
+   - Obtiene un token OAuth2 de **Keyrock** (Identity Manager)
+   - Inyecta el `X-Auth-Token` en cada petición a Orion-LD/TRUE Connector
+3. **FIWARE Backend**: Valida el token antes de procesar la petición
+
 ```mermaid
 sequenceDiagram
-    Frontend->>+Proxy: invoke('fiware-proxy')
-    Proxy->>+Keyrock: POST /v1/auth/tokens
-    Keyrock-->>-Proxy: X-Subject-Token
-    Proxy->>+Orion-LD: GET /entities (+ Token)
-    Orion-LD-->>-Proxy: JSON-LD Entities
-    Proxy-->>-Frontend: Normalized JSON
+    participant U as Usuario
+    participant F as Frontend (React)
+    participant S as Supabase Auth
+    participant P as Edge Function (Proxy)
+    participant K as Keyrock (IDM)
+    participant O as Orion-LD
+    
+    U->>F: Login (email/password)
+    F->>S: Autenticación Supabase
+    S-->>F: Sesión válida
+    
+    F->>P: invoke('fiware-proxy', {path, method, body})
+    P->>K: POST /v1/auth/tokens (FIWARE_USER/PASS)
+    K-->>P: X-Subject-Token (OAuth2)
+    P->>O: GET /entities + X-Auth-Token
+    O-->>P: JSON-LD Entities
+    P-->>F: Datos normalizados
 ```
 
-**Importante**: El token se cachea por 1 hora en el proxy. No necesitas preocuparte por la renovación.
+**Importante**: 
+- El token OAuth2 de Keyrock se cachea por **1 hora** en el proxy
+- **Tú NO necesitas** manejar renovación de tokens
+- El frontend solo necesita una sesión válida de Supabase
 
 ---
 
@@ -219,11 +257,31 @@ const publishResource = async (assetId: string) => {
 
 ### 3.3 Keyrock + Wilma (Identity & Access Management)
 
-**Para el desarrollador frontend**: Esto es **transparente**. El proxy maneja todo:
+**Para el desarrollador frontend**: La seguridad es **completamente transparente**. No necesitas preocuparte por:
 
-1. El proxy obtiene un token OAuth2 de Keyrock.
-2. Lo inyecta en el header `X-Auth-Token`.
-3. Wilma (PEP-Proxy) valida el token antes de permitir acceso a Orion.
+- ❌ Obtener tokens OAuth2 manualmente
+- ❌ Renovar tokens expirados
+- ❌ Inyectar headers de autenticación
+- ❌ Gestionar credenciales de FIWARE
+
+**El proxy maneja todo automáticamente:**
+
+1. **Keyrock** (Identity Manager en puerto 3005): Genera tokens OAuth2 para usuarios/aplicaciones
+2. **Wilma** (PEP-Proxy en puerto 1027): Valida tokens antes de permitir acceso a Orion-LD
+3. **Edge Function `fiware-proxy`**: Inyecta el `X-Auth-Token` en cada petición
+
+```typescript
+// ✅ Tú solo haces esto:
+const { data } = await supabase.functions.invoke('fiware-proxy', {
+  body: { path: '/ngsi-ld/v1/entities?type=Device', method: 'GET' }
+});
+
+// El proxy automáticamente:
+// 1. Obtiene token de Keyrock
+// 2. Añade header X-Auth-Token
+// 3. Envía petición autenticada a Wilma → Orion
+// 4. Devuelve los datos al frontend
+```
 
 **Tú solo llamas al proxy. El resto es magia. ✨**
 
@@ -233,40 +291,127 @@ const publishResource = async (assetId: string) => {
 
 ### 4.1 Crear un Producto con Smart Data Model
 
+Este ejemplo muestra cómo crear una entidad `Product` en Orion-LD con una relación a un `Supplier`:
+
 ```typescript
 import { fiwareApi, toNgsiEntity } from '@/services/fiwareApi';
 
+/**
+ * Crea un nuevo producto en el Context Broker
+ * @param productData - Datos del producto en formato plano
+ * @returns Respuesta de la API de FIWARE
+ */
 const createProduct = async (productData: {
   name: string;
   category: string;
   price: number;
-  supplier: string; // URN de otra entidad
+  supplierUrn: string; // URN de la entidad Supplier
 }) => {
+  // Construir la entidad NGSI-LD manualmente
   const entity = {
     id: `urn:ngsi-ld:Product:${Date.now()}`,
-    name: productData.name,
-    category: productData.category,
-    price: productData.price,
+    type: 'Product',
+    name: {
+      type: 'Property',
+      value: productData.name
+    },
+    category: {
+      type: 'Property',
+      value: productData.category
+    },
+    price: {
+      type: 'Property',
+      value: productData.price,
+      unitCode: 'EUR'
+    },
     supplier: {
       type: 'Relationship',
-      object: productData.supplier
-    }
+      object: productData.supplierUrn // Referencia a otra entidad
+    },
+    '@context': [
+      'https://uri.etsi.org/ngsi-ld/v1/ngsi-ld-core-context.jsonld',
+      'https://smartdatamodels.org/context.jsonld'
+    ]
   };
 
-  const ngsiEntity = toNgsiEntity(entity, 'Product');
-  const result = await fiwareApi.createEntity(ngsiEntity);
+  const result = await fiwareApi.createEntity(entity);
 
   if (result.success) {
-    console.log('✅ Producto creado en Orion-LD');
+    console.log('✅ Producto creado en Orion-LD:', entity.id);
+    return { success: true, entityId: entity.id };
   } else {
-    console.error('❌ Error:', result.error);
+    console.error('❌ Error al crear producto:', result.error);
+    return { success: false, error: result.error };
   }
-
-  return result;
 };
+
+// Ejemplo de uso:
+const newProduct = await createProduct({
+  name: 'Sensor de Temperatura Industrial',
+  category: 'IoT',
+  price: 249.99,
+  supplierUrn: 'urn:ngsi-ld:Supplier:empresa-001'
+});
 ```
 
-### 4.2 Consultar con Relaciones (Expandir)
+### 4.2 Consultar una Entidad Supplier con sus Productos
+
+Este ejemplo muestra cómo consultar un proveedor y sus productos relacionados:
+
+```typescript
+import { fiwareApi, normalizeNgsiEntity } from '@/services/fiwareApi';
+
+/**
+ * Obtiene un proveedor por su ID
+ * @param supplierId - URN del proveedor (ej: 'urn:ngsi-ld:Supplier:empresa-001')
+ * @returns Datos normalizados del proveedor
+ */
+const getSupplierById = async (supplierId: string) => {
+  const result = await fiwareApi.getEntity(supplierId);
+  
+  if (result.success && result.data) {
+    // Normalizar la estructura NGSI-LD a formato plano
+    const supplier = normalizeNgsiEntity(result.data);
+    console.log('📦 Supplier:', supplier);
+    return supplier;
+  } else {
+    console.error('❌ Supplier no encontrado:', result.error);
+    return null;
+  }
+};
+
+/**
+ * Obtiene todos los productos de un proveedor específico
+ * @param supplierUrn - URN del proveedor
+ * @returns Lista de productos relacionados
+ */
+const getProductsBySupplier = async (supplierUrn: string) => {
+  // Consulta con filtro de relación
+  const result = await fiwareApi.getEntities('Product', 100);
+  
+  if (result.success && result.data) {
+    // Filtrar productos que tienen relación con este proveedor
+    const products = result.data
+      .map(normalizeNgsiEntity)
+      .filter(product => product.supplier === supplierUrn);
+    
+    console.log(`📊 Productos del proveedor ${supplierUrn}:`, products.length);
+    return products;
+  }
+  
+  return [];
+};
+
+// Ejemplo de uso combinado:
+const supplierUrn = 'urn:ngsi-ld:Supplier:empresa-001';
+const supplier = await getSupplierById(supplierUrn);
+const products = await getProductsBySupplier(supplierUrn);
+
+console.log(`Proveedor: ${supplier?.name}`);
+console.log(`Total de productos: ${products.length}`);
+```
+
+**Opción alternativa con formato plano (keyValues):**
 
 ```typescript
 const getProductWithSupplier = async (productId: string) => {
@@ -278,6 +423,7 @@ const getProductWithSupplier = async (productId: string) => {
   });
 
   // keyValues devuelve formato plano automáticamente
+  // { id: '...', type: 'Product', name: 'Sensor', price: 249.99, supplier: 'urn:...' }
   return data;
 };
 ```
