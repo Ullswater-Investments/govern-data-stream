@@ -1,0 +1,52 @@
+{
+  "@context": {
+    "ngsi-ld": "https://uri.etsi.org/ngsi-ld/",
+    "schema": "https://schema.org/",
+    
+    "@comment1": "--- MODELOS DE LOGÍSTICA Y TRANSPORTE ---",
+    "Vehicle": "https://smartdatamodels.org/dataModel.Transportation/Vehicle",
+    "DeliveryOrder": "https://smartdatamodels.org/dataModel.Transportation/DeliveryOrder",
+    "cargoWeight": "https://smartdatamodels.org/dataModel.Transportation/cargoWeight",
+    "speed": "https://smartdatamodels.org/dataModel.Transportation/speed",
+    "fleetVehicleId": "https://smartdatamodels.org/dataModel.Transportation/fleetVehicleId",
+    "tripId": "https://smartdatamodels.org/dataModel.Transportation/tripId",
+    
+    "@comment2": "--- MODELOS DE MANUFACTURA E IOT (INDUSTRIA 4.0) ---",
+    "Device": "https://smartdatamodels.org/dataModel.Device/Device",
+    "Machine": "https://smartdatamodels.org/dataModel.Manufacturing/Machine",
+    "temperature": "https://smartdatamodels.org/dataModel.Device/temperature",
+    "batteryLevel": "https://smartdatamodels.org/dataModel.Device/batteryLevel",
+    "vibration": "https://smartdatamodels.org/dataModel.Device/vibration",
+    "operatingHours": "https://smartdatamodels.org/dataModel.Manufacturing/operatingHours",
+    "maintenanceStatus": "https://smartdatamodels.org/dataModel.Manufacturing/maintenanceStatus",
+    
+    "@comment3": "--- ATRIBUTOS COMUNES Y NEGOCIO ---",
+    "address": "https://schema.org/address",
+    "description": "https://uri.etsi.org/ngsi-ld/description",
+    "serialNumber": "https://smartdatamodels.org/dataModel.Device/serialNumber",
+    "category": "https://smartdatamodels.org/dataModel.Device/category",
+    "provider": "https://schema.org/provider",
+    
+    "@comment4": "--- PROCUREDATA BUSINESS MODELS ---",
+    "DataAsset": "https://procuredata.app/dataModel/DataAsset",
+    "Policy": "https://procuredata.app/dataModel/Policy",
+    "dataType": "https://procuredata.app/dataModel/dataType",
+    "holder": "https://procuredata.app/dataModel/holder",
+    "consumer": "https://procuredata.app/dataModel/consumer",
+    "usagePolicy": "https://procuredata.app/dataModel/usagePolicy",
+    "accessLevel": "https://procuredata.app/dataModel/accessLevel",
+    
+    "@comment5": "--- ENLACE AL CONTEXTO CORE DE ETSI ---",
+    "id": "@id",
+    "type": "@type",
+    "value": "https://uri.etsi.org/ngsi-ld/hasValue",
+    "observedAt": {
+      "@id": "https://uri.etsi.org/ngsi-ld/observedAt",
+      "@type": "https://uri.etsi.org/ngsi-ld/DateTime"
+    },
+    "location": {
+      "@id": "https://uri.etsi.org/ngsi-ld/location",
+      "@type": "https://uri.etsi.org/ngsi-ld/GeoProperty"
+    }
+  }
+}

@@ -581,7 +581,157 @@ const createSubscription = async (entityType: string, callbackUrl: string) => {
 
 ---
 
-## 🔒 5. Security-First: Best Practices
+## 🌐 5. Contexto Semántico JSON-LD: La "Piedra Rosetta" de PROCUREDATA
+
+### ¿Qué es el Contexto JSON-LD?
+
+El contexto JSON-LD (`@context`) es el **diccionario universal** que permite que diferentes sistemas entiendan exactamente qué significa cada campo de tus datos.
+
+**Sin contexto:**
+```json
+{ "temperature": 25 }
+```
+¿Es temperatura ambiente? ¿Temperatura de agua? ¿Fahrenheit o Celsius?
+
+**Con contexto:**
+```json
+{
+  "temperature": { "type": "Property", "value": 25, "unitCode": "CEL" },
+  "@context": "https://yourapp.lovable.app/contexts/procuredata-context.jsonld"
+}
+```
+Ahora cualquier sistema sabe que `temperature` se refiere a la definición estándar internacional de **temperatura de dispositivos IoT** de Smart Data Models.
+
+### Contexto Maestro de PROCUREDATA v2
+
+PROCUREDATA incluye un contexto JSON-LD especializado para:
+- **Logística y Transporte**: Vehicle, DeliveryOrder, cargoWeight, speed
+- **Manufactura e IoT (Industria 4.0)**: Device, Machine, temperature, vibration
+- **Modelos de Negocio**: DataAsset, Policy, usagePolicy, accessLevel
+
+**Ubicación del archivo:**
+```
+public/contexts/procuredata-context.jsonld
+```
+
+**URL pública (automática):**
+```
+https://yourapp.lovable.app/contexts/procuredata-context.jsonld
+```
+
+### Uso Automático del Contexto
+
+El servicio `fiwareApi.ts` **incluye automáticamente** el contexto PROCUREDATA en todas las entidades que crees:
+
+```typescript
+import { fiwareApi, toNgsiEntity } from '@/services/fiwareApi';
+
+// ✅ El contexto se añade automáticamente
+const sensor = toNgsiEntity({
+  name: "Sensor Vibración 001",
+  temperature: 24.5,
+  vibration: 0.8,
+  maintenanceStatus: "check_required"
+}, "Device", "urn:ngsi-ld:Device:sensor-vib-001");
+
+await fiwareApi.createEntity(sensor);
+```
+
+**Payload enviado a Orion-LD:**
+```json
+{
+  "id": "urn:ngsi-ld:Device:sensor-vib-001",
+  "type": "Device",
+  "name": { "type": "Property", "value": "Sensor Vibración 001" },
+  "temperature": { "type": "Property", "value": 24.5 },
+  "vibration": { "type": "Property", "value": 0.8 },
+  "maintenanceStatus": { "type": "Property", "value": "check_required" },
+  "@context": [
+    "https://uri.etsi.org/ngsi-ld/v1/ngsi-ld-core-context.jsonld",
+    "https://yourapp.lovable.app/contexts/procuredata-context.jsonld"
+  ]
+}
+```
+
+### Beneficios del Contexto Semántico
+
+1. **Interoperabilidad Europea**: Cualquier sistema compatible con Smart Data Models puede entender tus datos
+2. **Validación Automática**: Orion-LD valida que los campos existan en el vocabulario
+3. **Federación de Espacios de Datos**: Otros participantes del espacio de datos saben exactamente qué significa cada campo
+4. **TRUE Connector Compatible**: El TRUE Connector usa el contexto para negociar contratos IDS
+
+### Términos Clave del Contexto PROCUREDATA
+
+#### Logística y Transporte
+| Término | Definición | Ejemplo |
+|---------|------------|---------|
+| `Vehicle` | Vehículo de transporte | Camión, furgoneta, tren |
+| `cargoWeight` | Peso de la carga (kg) | 1200 |
+| `speed` | Velocidad actual (km/h) | 85 |
+| `fleetVehicleId` | ID en sistema de flotas | "FLEET-001" |
+
+#### Manufactura e IoT
+| Término | Definición | Ejemplo |
+|---------|------------|---------|
+| `Device` | Dispositivo IoT industrial | Sensor, actuador, controlador |
+| `Machine` | Máquina de manufactura | Torno CNC, prensa hidráulica |
+| `temperature` | Temperatura (°C) | 24.5 |
+| `vibration` | Nivel de vibración (g) | 0.8 |
+| `maintenanceStatus` | Estado de mantenimiento | "operational", "check_required" |
+| `operatingHours` | Horas de operación acumuladas | 1250 |
+
+#### Modelos de Negocio PROCUREDATA
+| Término | Definición | Ejemplo |
+|---------|------------|---------|
+| `DataAsset` | Activo de datos transaccionable | Dataset de telemetría IoT |
+| `Policy` | Política de uso de datos | "read", "analytics", "commercial" |
+| `usagePolicy` | Restricciones de uso | "purpose:analytics" |
+| `accessLevel` | Nivel de acceso | "public", "restricted", "confidential" |
+
+### Personalizar el Contexto
+
+Si necesitas añadir términos específicos de tu industria:
+
+1. **Editar el archivo:**
+   ```bash
+   # Editar public/contexts/procuredata-context.jsonld
+   ```
+
+2. **Añadir nuevos términos:**
+   ```json
+   {
+     "@context": {
+       "myCustomField": "https://mycompany.com/dataModel/myCustomField",
+       "anotherField": "https://mycompany.com/dataModel/anotherField"
+     }
+   }
+   ```
+
+3. **Desplegar:**
+   - Los cambios se aplican automáticamente al publicar tu app
+   - La URL pública se actualiza instantáneamente
+
+### Verificar Expansión del Contexto
+
+Para verificar que Orion-LD está expandiendo correctamente los términos:
+
+```typescript
+// Consultar con opción "expand" para ver términos completos
+const { data } = await supabase.functions.invoke('fiware-proxy', {
+  body: {
+    path: '/ngsi-ld/v1/entities/urn:ngsi-ld:Device:sensor-001?options=expand',
+    method: 'GET'
+  }
+});
+
+console.log(data);
+// Verás URLs completas:
+// "https://smartdatamodels.org/dataModel.Device/temperature" en lugar de "temperature"
+```
+
+---
+
+## 🔒 6. Security-First: Best Practices
 
 ### ✅ DO's
 
@@ -599,7 +749,7 @@ const createSubscription = async (entityType: string, callbackUrl: string) => {
 
 ---
 
-## 🛠️ 6. Debugging: Cómo usar Supabase Logs
+## 🛠️ 7. Debugging: Cómo usar Supabase Logs
 
 Si algo falla, revisa los logs de la Edge Function:
 

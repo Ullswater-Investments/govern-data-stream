@@ -95,6 +95,8 @@ export const simplifyEntities = (entities: NgsiEntity[]): SimpleEntity[] => {
 /**
  * Convierte un objeto JSON plano en una entidad NGSI-LD válida
  * 
+ * Incluye automáticamente el contexto PROCUREDATA para interoperabilidad semántica
+ * 
  * @example
  * const simple = { name: "Sensor01", temperature: 25, status: "active" };
  * const ngsi = toNgsiEntity(simple, "Device", "urn:ngsi-ld:Device:sensor01");
@@ -103,6 +105,8 @@ export const simplifyEntities = (entities: NgsiEntity[]): SimpleEntity[] => {
  * {
  *   "id": "urn:ngsi-ld:Device:sensor01",
  *   "type": "Device",
+ *   "@context": ["https://uri.etsi.org/ngsi-ld/v1/ngsi-ld-core-context.jsonld", 
+ *                "https://yourapp.lovable.app/contexts/procuredata-context.jsonld"],
  *   "name": { "type": "Property", "value": "Sensor01" },
  *   "temperature": { "type": "Property", "value": 25 },
  *   "status": { "type": "Property", "value": "active" }
@@ -113,10 +117,15 @@ export const toNgsiEntity = (
   type: string, 
   id?: string
 ): NgsiEntity => {
+  const contextUrl = `${window.location.origin}/contexts/procuredata-context.jsonld`;
+  
   const entity: NgsiEntity = {
     id: id || `urn:ngsi-ld:${type}:${Date.now()}`,
     type,
-    '@context': ['https://uri.etsi.org/ngsi-ld/v1/ngsi-ld-core-context.jsonld']
+    '@context': [
+      'https://uri.etsi.org/ngsi-ld/v1/ngsi-ld-core-context.jsonld',
+      contextUrl
+    ]
   };
 
   Object.keys(data).forEach(key => {
