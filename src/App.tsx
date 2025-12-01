@@ -10,6 +10,7 @@ import Auth from "./pages/Auth";
 import Dashboard from "./pages/Dashboard";
 import Catalog from "./pages/Catalog";
 import Transactions from "./pages/Transactions";
+import FiwareAdmin from "./pages/FiwareAdmin";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -46,6 +47,14 @@ const App = () => (
                 element={
                   <Layout>
                     <Transactions />
+                  </Layout>
+                }
+              />
+              <Route
+                path="/admin/fiware-node"
+                element={
+                  <Layout>
+                    <FiwareAdmin />
                   </Layout>
                 }
               />

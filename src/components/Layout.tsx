@@ -57,6 +57,7 @@ const Layout = ({ children }: LayoutProps) => {
     { path: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
     { path: "/catalog", label: "Catalog", icon: Database },
     { path: "/transactions", label: "Transactions", icon: FileText },
+    { path: "/admin/fiware-node", label: "FIWARE Node", icon: Shield },
   ];
 
   return (
