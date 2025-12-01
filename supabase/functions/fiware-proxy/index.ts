@@ -95,6 +95,8 @@ serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
   }
+  
+  console.log('🚀 FIWARE Proxy v2.0 - Starting request handling');
 
   try {
     // Get environment variables
