@@ -1,392 +1,553 @@
-# 🏗️ Guía de Despliegue FIWARE para PROCUREDATA v2
+# Guía de Despliegue FIWARE - Desarrollo Local y Producción
 
-Esta guía detalla cómo desplegar la infraestructura completa de FIWARE (Orion-LD, Keyrock, PEP-Proxy, TRUE Connector) en un servidor VPS o local para conectarlo con PROCUREDATA.
+## 🎯 Objetivo
 
----
-
-## 📋 Requisitos Previos
-
-- **Docker** y **Docker Compose** instalados
-- **4GB RAM mínimo** (8GB recomendado)
-- **Puerto 80/443** abierto para acceso HTTP/HTTPS
-- **Certificados IDS** (opcional para TRUE Connector)
+Esta guía te ayudará a desplegar FIWARE localmente para desarrollo y posteriormente migrar a producción sin fricción.
 
 ---
 
-## 🐳 Paso 1: Docker Compose Completo
+## 🚀 Fase 1: Desarrollo Local
 
-Crea un archivo `docker-compose.yml` en tu servidor:
+### 1.1 Levantar el Stack FIWARE
 
-```yaml
-version: "3.9"
+**Prerequisitos:**
+- Docker y Docker Compose instalados
+- Al menos 4GB de RAM disponible
+- Puertos libres: 1026, 1027, 3005, 27017, 3306, 8080, 8443
 
-networks:
-  data_space_net:
-    driver: bridge
-
-volumes:
-  mongo-db:
-  mysql-db:
-  ids-certs:
-
-services:
-  # === BASES DE DATOS ===
-  
-  mongo-db:
-    image: mongo:4.4
-    hostname: mongo-db
-    container_name: db-mongo
-    networks:
-      - data_space_net
-    volumes:
-      - mongo-db:/data/db
-    command: --wiredTigerCacheSizeGB 1.5 --nojournal
-    restart: unless-stopped
-
-  mysql-db:
-    image: mysql:5.7
-    hostname: mysql-db
-    container_name: db-mysql
-    networks:
-      - data_space_net
-    environment:
-      MYSQL_ROOT_PASSWORD: idm_password
-      MYSQL_DATABASE: idm
-    volumes:
-      - mysql-db:/var/lib/mysql
-    restart: unless-stopped
-
-  # === CONTEXT BROKER (Cerebro de Datos) ===
-  
-  orion:
-    image: fiware/orion-ld:latest
-    hostname: orion
-    container_name: fiware-orion
-    networks:
-      - data_space_net
-    depends_on:
-      - mongo-db
-    ports:
-      - "1026:1026"  # API NGSI-LD sin protección (uso interno)
-    command: -dbhost mongo-db -logLevel WARN -forwarding true
-    restart: unless-stopped
-
-  # === IDENTITY MANAGEMENT ===
-  
-  keyrock:
-    image: fiware/idm:latest
-    hostname: keyrock
-    container_name: fiware-keyrock
-    networks:
-      - data_space_net
-    ports:
-      - "3005:3005"  # Admin Panel y API
-    environment:
-      IDM_DB_HOST: mysql-db
-      IDM_DB_NAME: idm
-      IDM_DB_USER: root
-      IDM_DB_PASS: idm_password
-      IDM_HOST: http://localhost:3005
-      IDM_PORT: 3005
-      IDM_ADMIN_EMAIL: admin@procuredata.com
-      IDM_ADMIN_PASS: Admin1234!
-    depends_on:
-      - mysql-db
-    restart: unless-stopped
-
-  # === PEP PROXY (Punto de Acceso Seguro) ===
-  
-  pep-proxy:
-    image: fiware/pep-proxy:latest
-    hostname: pep-proxy
-    container_name: fiware-pep-proxy
-    networks:
-      - data_space_net
-    ports:
-      - "1027:1027"  # Este es el puerto que usarás en FIWARE_HOST
-    environment:
-      PEP_PROXY_APP_HOST: orion
-      PEP_PROXY_APP_PORT: 1026
-      PEP_PROXY_PORT: 1027
-      PEP_PROXY_IDM_HOST: keyrock
-      PEP_PROXY_IDM_PORT: 3005
-      PEP_PROXY_AUTH_ENABLED: "true"
-      PEP_PROXY_PDP: idm
-      # Estas credenciales deben generarse en Keyrock
-      PEP_PROXY_APP_ID: "to-be-generated"
-      PEP_PROXY_USERNAME: "pep_proxy_user"
-      PEP_PROXY_PASSWORD: "pep_proxy_password"
-    depends_on:
-      - keyrock
-      - orion
-    restart: unless-stopped
-
-  # === TRUE CONNECTOR (IDS - Soberanía de Datos) ===
-  
-  true-connector-ecc:
-    image: rdlabengpa/ids_execution_core_container:latest
-    hostname: true-ecc
-    container_name: true-ecc
-    networks:
-      - data_space_net
-    ports:
-      - "8080:8080"   # API Gestión
-      - "29292:29292" # Canal Seguro IDS
-    volumes:
-      - ./certs:/etc/cert
-    environment:
-      DAPS_URL: https://daps.aisec.fraunhofer.de
-      CONNECTOR_ID: urn:ids:connector:procuredata-node-01
-      KEYSTORE_PASSWORD: password
-    restart: unless-stopped
-
-  true-connector-data-app:
-    image: rdlabengpa/ids_be_data_app:latest
-    hostname: true-data-app
-    container_name: true-data-app
-    networks:
-      - data_space_net
-    environment:
-      ECC_URL: http://true-ecc:8080
-      BROKER_URL: http://pep-proxy:1027
-    depends_on:
-      - true-connector-ecc
-    restart: unless-stopped
-```
-
----
-
-## 🚀 Paso 2: Levantar los Servicios
+**Iniciar contenedores:**
 
 ```bash
-# Navegar al directorio donde está docker-compose.yml
-cd /ruta/a/tu/directorio
+# Clonar el repositorio (si aún no lo has hecho)
+git clone <tu-repo>
+cd <tu-repo>
 
-# Iniciar todos los servicios
+# Levantar todos los servicios
 docker-compose up -d
 
-# Ver logs en tiempo real
-docker-compose logs -f
-
-# Verificar que todos los contenedores estén corriendo
+# Verificar que todos los contenedores están corriendo
 docker-compose ps
 ```
 
-Deberías ver todos los servicios con estado `Up`.
+**Salida esperada:**
 
----
-
-## 🔑 Paso 3: Configurar Keyrock (Identity Management)
-
-### 3.1 Acceder al Admin Panel
-
-1. Abre tu navegador: `http://tu-servidor-ip:3005`
-2. Login:
-   - **Email**: `admin@procuredata.com`
-   - **Password**: `Admin1234!`
-
-### 3.2 Crear Aplicación para PEP-Proxy
-
-1. **Applications** → **Register a new application**
-2. **Name**: `PROCUREDATA Context Broker`
-3. **URL**: `http://tu-servidor-ip:1027`
-4. **Callback URL**: `http://tu-servidor-ip:1027/auth/fiware/callback`
-5. **Guardar** → Copia el `App ID` y el `App Secret`
-
-### 3.3 Crear Usuario PEP Proxy
-
-1. **Users** → **Create user**
-2. **Username**: `pep_proxy_user`
-3. **Email**: `pep@procuredata.com`
-4. **Password**: `pep_proxy_password`
-5. **Assign Role**: `PEP Proxy`
-
-### 3.4 Actualizar PEP-Proxy
-
-Edita `docker-compose.yml` y actualiza las variables:
-
-```yaml
-PEP_PROXY_APP_ID: "el-app-id-copiado"
-PEP_PROXY_USERNAME: "pep_proxy_user"
-PEP_PROXY_PASSWORD: "pep_proxy_password"
+```
+NAME                     STATUS          PORTS
+orion-ld                 Up              0.0.0.0:1026->1026/tcp
+mongo                    Up              27017/tcp
+keyrock                  Up              0.0.0.0:3005->3005/tcp
+mysql                    Up              3306/tcp
+pep-proxy                Up              0.0.0.0:1027->1027/tcp
+true-connector-ecc       Up              0.0.0.0:8080->8080/tcp
+true-connector-data-app  Up              8083/tcp
 ```
 
-Reinicia el PEP-Proxy:
+### 1.2 Ejecutar Script de Inicialización
+
+El script `setup_dev_env.sh` automatiza:
+- Autenticación en Keyrock como admin
+- Creación de aplicación OAuth2
+- Creación de usuarios de servicio (PEP Proxy)
+- Inyección de datos de prueba en Orion-LD
 
 ```bash
-docker-compose restart pep-proxy
+chmod +x setup_dev_env.sh
+./setup_dev_env.sh
 ```
 
----
+**Resultado:**
+```
+🚀 Iniciando configuración del entorno de desarrollo...
+✅ Keyrock está online.
+🔑 Obteniendo token de administrador...
+📦 Registrando aplicación 'PROCUREDATA Core'...
+👤 Creando usuario de servicio 'pep_user'...
+📝 Generando archivo '.env.dev' con las credenciales...
+🌱 Sembrando datos de prueba en Orion-LD...
 
-## 🔗 Paso 4: Configurar Secretos en Supabase
-
-En tu proyecto de Lovable, los secretos ya están configurados. Solo necesitas verificar que tengan los valores correctos:
-
-1. **FIWARE_HOST**: `http://tu-servidor-ip:1027` (PEP-Proxy protegido)
-2. **FIWARE_USER**: `tu-usuario-keyrock`
-3. **FIWARE_PASS**: `tu-password-keyrock`
-4. **IDM_HOST**: `http://tu-servidor-ip:3005`
-
-### Para uso local (desarrollo):
-
-Si estás desarrollando localmente, puedes usar:
-- **FIWARE_HOST**: `http://localhost:1027`
-- **IDM_HOST**: `http://localhost:3005`
-
----
-
-## ✅ Paso 5: Probar la Conexión
-
-### 5.1 Test del Context Broker (directo, sin auth)
-
-```bash
-curl http://tu-servidor-ip:1026/version
+================================================================
+✅ ¡ENTORNO LISTO!
+-----------------------------------------------------------------
+1. Credenciales guardadas en: .env.dev
+2. Datos inyectados: 1 Vehículo, 1 Sensor, 1 Data Asset, 1 Policy
+3. PEP Proxy User: pep_user / pep_password_123
+================================================================
 ```
 
-Debería devolver información de versión de Orion-LD.
+### 1.3 Verificar Conectividad
 
-### 5.2 Test de Keyrock
+**Orion-LD (Context Broker):**
 
 ```bash
-curl -X POST http://tu-servidor-ip:3005/v1/auth/tokens \
+curl http://localhost:1026/version
+
+# Respuesta esperada:
+{
+  "orion": {
+    "version": "1.5.0",
+    "uptime": "0 d, 0 h, 5 m, 12 s",
+    "git_hash": "nogitversion",
+    "compile_time": "Mon Jan 15 09:33:42 UTC 2024",
+    "compiled_by": "root",
+    "compiled_in": "buildkitsandbox"
+  }
+}
+```
+
+**Keyrock (Identity Manager):**
+
+```bash
+curl http://localhost:3005/v1/auth/tokens \
   -H "Content-Type: application/json" \
-  -d '{
-    "name": "admin@procuredata.com",
-    "password": "Admin1234!"
-  }' \
-  -i
+  -d '{"name": "admin@test.com", "password": "1234"}'
+
+# Respuesta esperada (token en el header X-Subject-Token):
+{
+  "token": {
+    "methods": ["password"],
+    "expires_at": "2025-01-15T18:00:00.000Z"
+  }
+}
 ```
-
-Debería devolver un header `X-Subject-Token`.
-
-### 5.3 Test desde PROCUREDATA
-
-En la aplicación Lovable, navega a `/admin/fiware-node` y verifica:
-
-1. ✅ **Orion-LD**: Estado "Conectado"
-2. ✅ **Keyrock**: Estado "Conectado"
-3. ✅ **TRUE Connector**: Estado "Conectado" (si configuraste certificados)
 
 ---
 
-## 📊 Paso 6: Crear Tu Primera Entidad
+## 🌐 Fase 2: Exponer Docker Local a Lovable Cloud (Ngrok)
 
-### Desde la API (curl):
+### ¿Por qué Ngrok?
 
+**Problema:** Lovable (cloud) no puede acceder a `http://localhost:1027` de tu máquina local.
+
+**Solución:** Crear un túnel seguro con Ngrok para exponer temporalmente tu Docker local a Internet.
+
+### 2.1 Instalar Ngrok
+
+**macOS:**
 ```bash
-curl -X POST http://tu-servidor-ip:1026/ngsi-ld/v1/entities \
-  -H "Content-Type: application/ld+json" \
-  -d '{
-    "id": "urn:ngsi-ld:Device:sensor001",
-    "type": "Device",
-    "name": {
-      "type": "Property",
-      "value": "Sensor de Temperatura"
-    },
-    "temperature": {
-      "type": "Property",
-      "value": 23.5,
-      "unitCode": "CEL"
-    },
-    "@context": [
-      "https://uri.etsi.org/ngsi-ld/v1/ngsi-ld-core-context.jsonld"
-    ]
-  }'
+brew install ngrok/ngrok/ngrok
 ```
 
-### Desde PROCUREDATA:
+**Linux:**
+```bash
+curl -s https://ngrok-agent.s3.amazonaws.com/ngrok.asc | sudo tee /etc/apt/trusted.gpg.d/ngrok.asc >/dev/null
+echo "deb https://ngrok-agent.s3.amazonaws.com buster main" | sudo tee /etc/apt/sources.list.d/ngrok.list
+sudo apt update && sudo apt install ngrok
+```
 
-Usa el servicio `fiwareApi` en tu código:
+**Windows:**
+Descargar desde [https://ngrok.com/download](https://ngrok.com/download)
+
+### 2.2 Configurar Cuenta (Gratis)
+
+1. Crear cuenta en [https://dashboard.ngrok.com/signup](https://dashboard.ngrok.com/signup)
+2. Obtener tu Authtoken desde [https://dashboard.ngrok.com/get-started/your-authtoken](https://dashboard.ngrok.com/get-started/your-authtoken)
+3. Autenticarte:
+
+```bash
+ngrok config add-authtoken <tu-token>
+```
+
+### 2.3 Exponer el PEP Proxy
+
+```bash
+# Exponer el puerto 1027 (PEP Proxy - entrada principal a FIWARE)
+ngrok http 1027
+```
+
+**Salida:**
+
+```
+ngrok                                                                   
+
+Session Status                online
+Account                       tu-email@ejemplo.com (Plan: Free)
+Version                       3.5.0
+Region                        Europe (eu)
+Latency                       -
+Web Interface                 http://127.0.0.1:4040
+Forwarding                    https://a1b2-3c4d-5e6f.ngrok-free.app -> http://localhost:1027
+
+Connections                   ttl     opn     rt1     rt5     p50     p90
+                              0       0       0.00    0.00    0.00    0.00
+```
+
+### 2.4 Configurar Supabase Edge Function
+
+**Copiar la URL generada** (en el ejemplo: `https://a1b2-3c4d-5e6f.ngrok-free.app`) y actualizar las variables de entorno en Supabase:
+
+1. Ir a tu proyecto Lovable Cloud → Backend → Secrets
+2. Actualizar la variable `FIWARE_HOST`:
+
+```env
+FIWARE_HOST=https://a1b2-3c4d-5e6f.ngrok-free.app
+```
+
+3. Guardar cambios y esperar ~30 segundos para que se apliquen.
+
+### 2.5 Probar Conexión
+
+Desde tu frontend de Lovable:
 
 ```typescript
-import { fiwareApi, toNgsiEntity } from '@/services/fiwareApi';
+import { fiwareApi } from '@/services/fiwareApi';
 
-const createSensor = async () => {
-  const entity = toNgsiEntity({
-    id: 'urn:ngsi-ld:Device:sensor001',
-    name: 'Sensor de Temperatura',
-    temperature: 23.5
-  }, 'Device');
-
-  const result = await fiwareApi.createEntity(entity);
-  console.log(result);
+const testConnection = async () => {
+  const response = await fiwareApi.getHealthStatus();
+  console.log('FIWARE Status:', response);
 };
 ```
 
----
+**Respuesta esperada:**
 
-## 🔒 Paso 7: TRUE Connector (Opcional - IDS)
-
-### 7.1 Generar Certificados
-
-Si no tienes certificados DAPS:
-
-```bash
-mkdir certs
-cd certs
-
-# Generar keystore auto-firmado (solo desarrollo)
-keytool -genkeypair -alias selfsigned \
-  -keyalg RSA -keysize 2048 \
-  -keystore keystore.jks \
-  -storepass password \
-  -dname "CN=procuredata-node,O=PROCUREDATA,C=ES"
+```json
+{
+  "orion": "connected",
+  "keyrock": "connected",
+  "connector": "connected"
+}
 ```
 
-### 7.2 Conectar con DAPS Real (Producción)
+### ⚠️ Limitaciones de Ngrok (Plan Gratuito)
 
-Para producción, necesitas:
-1. Registrarte en AISEC (https://daps.aisec.fraunhofer.de)
-2. Obtener certificados oficiales IDS
-3. Configurar `connector.cert` y `connector.key`
+- **Sesión temporal**: La URL cambia cada vez que reinicias Ngrok
+- **Límite de conexiones**: 40 solicitudes/minuto
+- **Banner Ngrok**: El navegador puede mostrar un aviso de seguridad (normal)
 
----
-
-## 🛠️ Troubleshooting
-
-### Problema: "Error 401 Unauthorized"
-
-**Solución**: Verifica que el usuario existe en Keyrock y que los secretos FIWARE_USER/FIWARE_PASS son correctos.
-
-### Problema: "Connection refused"
-
-**Solución**: 
-1. Verifica que los contenedores estén corriendo: `docker-compose ps`
-2. Revisa logs: `docker-compose logs keyrock orion pep-proxy`
-3. Verifica que los puertos no estén bloqueados por firewall
-
-### Problema: "FIWARE backend not configured"
-
-**Solución**: Los secretos en Supabase están vacíos o mal configurados. Ve a Settings → Cloud → Secrets y verifica FIWARE_HOST.
+**Para desarrollo serio:** Considera usar un VPS con IP estática (ver Fase 3).
 
 ---
 
-## 🎯 Próximos Pasos
+## 🔐 Fase 3: Certificados para TRUE Connector
 
-1. ✅ **Verificar estado** en `/admin/fiware-node`
-2. 📊 **Crear entidades IoT** de ejemplo
-3. 👥 **Configurar usuarios** en Keyrock
-4. 🔐 **Definir políticas IDS** en TRUE Connector
-5. 🔄 **Integrar con Catalog** para sincronizar Data Assets
+### ¿Por qué se necesitan certificados?
+
+El **TRUE Connector** (componente IDS para soberanía de datos) requiere certificados SSL/TLS válidos para:
+1. Autenticar la identidad del Data Space Participant
+2. Cifrar la comunicación IDSCP2 (IDS Communication Protocol)
+
+### 3.1 Certificados "Dummy" para Desarrollo
+
+Para evitar el "infierno de Java/Keytool" durante el desarrollo, hemos pre-generado certificados autofirmados válidos por 10 años.
+
+**Ubicación:** `./certs-dev/` (incluido en el repositorio)
+
+```
+certs-dev/
+├── connector.p12        # Certificado del conector (formato PKCS12)
+├── connector.crt        # Certificado público (PEM)
+├── connector.key        # Clave privada (PEM)
+├── truststore.jks       # Truststore Java (para verificación)
+└── README.md            # Información sobre los certificados
+```
+
+**Configuración en `docker-compose.yml`:**
+
+```yaml
+services:
+  true-connector-ecc:
+    image: rdlabengpa/ids_execution_core_container:v1.13
+    volumes:
+      - ./certs-dev:/etc/cert  # Montar certificados dummy
+    environment:
+      - KEYSTORE_PATH=/etc/cert/connector.p12
+      - KEYSTORE_PASSWORD=changeme
+```
+
+### 3.2 Generar Certificados Reales (Producción)
+
+**Opción A: Certificado Autofirmado (Entorno de Testing)**
+
+```bash
+# Generar clave privada y certificado
+openssl req -x509 -newkey rsa:4096 -keyout connector.key -out connector.crt \
+  -days 3650 -nodes \
+  -subj "/C=ES/ST=Madrid/L=Madrid/O=ProcureData/OU=DataSpace/CN=procuredata.connector"
+
+# Convertir a formato PKCS12 (requerido por Java)
+openssl pkcs12 -export -out connector.p12 \
+  -inkey connector.key \
+  -in connector.crt \
+  -name connector \
+  -passout pass:changeme
+
+# Crear truststore Java
+keytool -import -trustcacerts -alias connector \
+  -file connector.crt \
+  -keystore truststore.jks \
+  -storepass changeme -noprompt
+```
+
+**Opción B: Certificado de IDS Daps (Producción Real)**
+
+Para conectarse a espacios de datos europeos reales (Catena-X, Gaia-X, etc.), necesitas un certificado firmado por un **IDS DAPS** (Dynamic Attribute Provisioning Service).
+
+1. Registrarte como participante en [https://internationaldataspaces.org/](https://internationaldataspaces.org/)
+2. Solicitar certificado IDS a través de tu Certificate Authority (CA)
+3. Actualizar `docker-compose.yml` con las rutas de los certificados reales
+4. Configurar `application.properties` del TRUE Connector con el DAPS endpoint
 
 ---
 
-## 📚 Documentación Oficial
+## 🏭 Fase 4: Despliegue en Producción (VPS)
 
-- **Orion-LD**: https://fiware-orion.readthedocs.io/
-- **Keyrock**: https://fiware-idm.readthedocs.io/
-- **PEP-Proxy**: https://fiware-pep-proxy.readthedocs.io/
-- **TRUE Connector**: https://github.com/Engineering-Research-and-Development/true-connector
+### 4.1 Requisitos Mínimos del Servidor
+
+**Especificaciones:**
+- **CPU**: 4 vCPUs
+- **RAM**: 8 GB
+- **Disco**: 50 GB SSD
+- **OS**: Ubuntu 22.04 LTS
+- **Red**: IP pública estática + dominio DNS
+
+**Proveedores recomendados:**
+- DigitalOcean (Droplet)
+- AWS (EC2 t3.large)
+- Hetzner (CX31)
+- Azure (B2s)
+
+### 4.2 Configurar Firewall
+
+```bash
+# Permitir SSH (puerto 22)
+sudo ufw allow 22/tcp
+
+# Permitir HTTPS (443) para el proxy inverso
+sudo ufw allow 443/tcp
+
+# Permitir HTTP (80) para redireccionamiento a HTTPS
+sudo ufw allow 80/tcp
+
+# Activar firewall
+sudo ufw enable
+```
+
+### 4.3 Instalar Docker en el VPS
+
+```bash
+# Actualizar sistema
+sudo apt update && sudo apt upgrade -y
+
+# Instalar Docker
+curl -fsSL https://get.docker.com -o get-docker.sh
+sudo sh get-docker.sh
+
+# Instalar Docker Compose
+sudo apt install docker-compose-plugin -y
+
+# Añadir usuario al grupo docker (evitar sudo)
+sudo usermod -aG docker $USER
+newgrp docker
+```
+
+### 4.4 Clonar Repositorio y Levantar Servicios
+
+```bash
+# Clonar proyecto
+git clone <tu-repo>
+cd <tu-repo>
+
+# Copiar certificados reales (si los tienes)
+# cp /ruta/a/certificados/* ./certs-prod/
+
+# Levantar stack
+docker-compose up -d
+
+# Ejecutar script de inicialización
+./setup_dev_env.sh
+```
+
+### 4.5 Configurar Nginx como Reverse Proxy
+
+**¿Por qué?** Para:
+- Servir FIWARE en HTTPS (en lugar de HTTP)
+- Ocultar puertos internos (1026, 3005, etc.)
+- Agregar rate limiting y protección DDoS
+
+**Instalar Nginx:**
+
+```bash
+sudo apt install nginx certbot python3-certbot-nginx -y
+```
+
+**Configurar dominio:**
+
+1. Crear registro DNS A apuntando a tu IP del VPS:
+   ```
+   fiware.procuredata.app → 123.45.67.89
+   ```
+
+2. Crear configuración de Nginx:
+
+```bash
+sudo nano /etc/nginx/sites-available/fiware
+```
+
+**Contenido:**
+
+```nginx
+server {
+    listen 80;
+    server_name fiware.procuredata.app;
+
+    # Redirigir HTTP a HTTPS
+    return 301 https://$server_name$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name fiware.procuredata.app;
+
+    # Certificado SSL (generado por Certbot)
+    ssl_certificate /etc/letsencrypt/live/fiware.procuredata.app/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/fiware.procuredata.app/privkey.pem;
+    include /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+
+    # Proxy al PEP-Proxy (entrada principal a FIWARE)
+    location / {
+        proxy_pass http://localhost:1027;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        
+        # CORS headers (si es necesario)
+        add_header 'Access-Control-Allow-Origin' '*' always;
+        add_header 'Access-Control-Allow-Methods' 'GET, POST, PUT, DELETE, PATCH, OPTIONS' always;
+        add_header 'Access-Control-Allow-Headers' 'Authorization, Content-Type' always;
+        
+        # Rate limiting (100 req/min por IP)
+        limit_req zone=fiware_limit burst=20 nodelay;
+    }
+}
+
+# Definir zona de rate limiting
+limit_req_zone $binary_remote_addr zone=fiware_limit:10m rate=100r/m;
+```
+
+**Activar configuración:**
+
+```bash
+sudo ln -s /etc/nginx/sites-available/fiware /etc/nginx/sites-enabled/
+sudo nginx -t  # Verificar sintaxis
+sudo systemctl restart nginx
+```
+
+**Obtener certificado SSL gratuito:**
+
+```bash
+sudo certbot --nginx -d fiware.procuredata.app
+```
+
+### 4.6 Actualizar Supabase Edge Function
+
+Cambiar `FIWARE_HOST` de la URL de Ngrok a la URL de producción:
+
+```env
+# Desarrollo (Ngrok)
+FIWARE_HOST=https://a1b2-3c4d-5e6f.ngrok-free.app
+
+# Producción (VPS)
+FIWARE_HOST=https://fiware.procuredata.app
+```
 
 ---
 
-## 🆘 Soporte
+## 🔍 Troubleshooting
 
-Si encuentras problemas durante el despliegue:
+### Problema: "Connection refused" al llamar al proxy
 
-1. Revisa los logs: `docker-compose logs -f [servicio]`
-2. Verifica conectividad de red entre contenedores
-3. Consulta el panel `/admin/fiware-node` en PROCUREDATA
+**Causa:** Docker no está corriendo o los contenedores fallaron al iniciar.
 
-¡Tu Espacio de Datos industrial está listo! 🚀
+**Solución:**
+
+```bash
+# Verificar estado
+docker-compose ps
+
+# Ver logs
+docker-compose logs orion-ld
+docker-compose logs keyrock
+docker-compose logs pep-proxy
+
+# Reiniciar servicios
+docker-compose restart
+```
+
+### Problema: "FIWARE_HOST not configured" en el frontend
+
+**Causa:** La variable de entorno no está configurada en Supabase.
+
+**Solución:**
+
+1. Ir a Lovable Cloud → Backend → Secrets
+2. Añadir `FIWARE_HOST` con la URL correcta
+3. Esperar 1 minuto para que se aplique
+4. Refrescar la página del frontend
+
+### Problema: Ngrok muestra "ERR_NGROK_8012"
+
+**Causa:** El túnel se desconectó o la sesión expiró.
+
+**Solución:**
+
+```bash
+# Reiniciar Ngrok
+pkill ngrok
+ngrok http 1027
+```
+
+### Problema: TRUE Connector no inicia (Exit Code 1)
+
+**Causa:** Faltan certificados o el formato es incorrecto.
+
+**Solución:**
+
+```bash
+# Verificar que existen los certificados
+ls -la ./certs-dev/
+
+# Ver logs del contenedor
+docker logs true-connector-ecc
+
+# Regenerar certificados si es necesario
+./scripts/generate-certs.sh
+```
+
+---
+
+## 📚 Recursos Adicionales
+
+- [FIWARE Official Documentation](https://fiware.org/documentation/)
+- [Ngrok Documentation](https://ngrok.com/docs)
+- [TRUE Connector GitHub](https://github.com/Engineering-Research-and-Development/true-connector)
+- [IDS Reference Architecture](https://internationaldataspaces.org/publications/reference-architecture-model/)
+- [Smart Data Models](https://smartdatamodels.org/)
+
+---
+
+## ✅ Checklist de Despliegue
+
+### Desarrollo Local
+- [ ] Docker instalado y corriendo
+- [ ] `docker-compose up -d` ejecutado exitosamente
+- [ ] `setup_dev_env.sh` completado sin errores
+- [ ] Archivo `.env.dev` generado
+- [ ] Orion-LD responde en `http://localhost:1026/version`
+- [ ] Keyrock responde en `http://localhost:3005`
+- [ ] Ngrok instalado y autenticado
+- [ ] Túnel Ngrok activo en puerto 1027
+- [ ] `FIWARE_HOST` actualizado en Supabase con URL de Ngrok
+- [ ] Frontend de Lovable conecta correctamente
+
+### Producción
+- [ ] VPS con Ubuntu 22.04 provisionado
+- [ ] Docker y Docker Compose instalados en VPS
+- [ ] Dominio DNS apuntando a IP del VPS
+- [ ] Certificados SSL configurados (Let's Encrypt)
+- [ ] Nginx configurado como reverse proxy
+- [ ] Firewall (ufw) configurado
+- [ ] `docker-compose up -d` en VPS
+- [ ] `FIWARE_HOST` actualizado con URL de producción
+- [ ] Certificados reales del TRUE Connector (para IDS federado)
+- [ ] Monitorización configurada (opcional: Prometheus + Grafana)
