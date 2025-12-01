@@ -7,10 +7,10 @@ import { AuthProvider } from "./hooks/useAuth";
 import { OrganizationProvider } from "./hooks/useOrganizationContext";
 import Layout from "./components/Layout";
 import Auth from "./pages/Auth";
-import Dashboard from "./pages/Dashboard";
-import Catalog from "./pages/Catalog";
-import Transactions from "./pages/Transactions";
-import FiwareAdmin from "./pages/FiwareAdmin";
+import Dashboard from './pages/DashboardEnhanced';
+import Catalog from './pages/Catalog';
+import Transactions from './pages/Transactions';
+import FiwareAdmin from './pages/FiwareAdminImproved';
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
