@@ -81,6 +81,30 @@ La arquitectura utiliza **3 bases de datos especializadas**, cada una optimizada
   - Backups point-in-time automáticos
 - **Acceso**: Directo desde frontend vía Supabase SDK
 
+**Ejemplo práctico**: Cuando un consumidor solicita acceso a un dataset:
+```sql
+-- PostgreSQL: Registra la transacción de negocio
+INSERT INTO data_transactions (
+  asset_id, 
+  consumer_org_id, 
+  requested_by, 
+  status
+) VALUES (
+  'asset-001', 
+  'org-consumer-123', 
+  'user@company.com', 
+  'pending_subject'
+);
+```
+
+**¿Por qué PostgreSQL?**
+- ✅ Garantiza que **no se pierda ninguna transacción** (WAL + ACID)
+- ✅ Foreign Keys validan que `asset_id` existe antes de insertar
+- ✅ RLS policies impiden que org-consumer-123 vea transacciones de otras organizaciones
+- ✅ Backups automáticos permiten auditorías históricas (GDPR compliance)
+
+---
+
 #### MongoDB (Orion-LD) - "El Cerebro en Tiempo Real"
 - **Propósito**: Estado dinámico y mutable de activos físicos
 - **Casos de uso**:
@@ -90,8 +114,32 @@ La arquitectura utiliza **3 bases de datos especializadas**, cada una optimizada
 - **Ventajas**:
   - Esquema flexible (JSON-like documents)
   - Queries geoespaciales nativas
-  - Alta escritura concurrente
+  - Alta escritura concurrente (10,000+ writes/s)
 - **Acceso**: **Solo** vía Edge Function `fiware-proxy` (nunca directo)
+
+**Ejemplo práctico**: El sensor reporta nueva temperatura cada 5 segundos:
+```json
+// MongoDB: Actualiza el estado actual del sensor (gemelo digital)
+PATCH /ngsi-ld/v1/entities/urn:ngsi-ld:Sensor:001/attrs
+{
+  "temperature": {
+    "type": "Property",
+    "value": 24.1,
+    "unitCode": "CEL",
+    "observedAt": "2024-12-01T10:05:23Z"
+  }
+}
+```
+
+**¿Por qué MongoDB?**
+- ✅ **Alta frecuencia de escritura**: Optimizado para IoT (miles de updates/segundo)
+- ✅ **Esquema flexible**: Los sensores pueden agregar atributos sin migraciones (ej: agregar `humidity`)
+- ✅ **Queries geoespaciales**: "Encuentra todos los sensores en 5km de Madrid" es nativo
+- ✅ **Time-to-Live (TTL)**: Datos antiguos se eliminan automáticamente (ej: temperatura hace 30 días)
+
+**Anti-Patrón**: ❌ Nunca almacenar transacciones históricas en MongoDB. Son datos de auditoría y pertenecen a PostgreSQL.
+
+---
 
 #### MySQL (Keyrock) - "El Guardián"
 - **Propósito**: Gestión de identidades y tokens OAuth2
@@ -103,6 +151,56 @@ La arquitectura utiliza **3 bases de datos especializadas**, cada una optimizada
   - Estándar en FIWARE (amplia compatibilidad)
   - Integración nativa con PEP-Proxy
 - **Acceso**: Interno, gestionado por Keyrock API
+
+**Ejemplo práctico**: Usuario bot solicita token para acceder a Orion:
+```sql
+-- MySQL: Keyrock valida credenciales y genera token
+SELECT id, password_hash FROM user WHERE email = 'bot@procuredata.com';
+INSERT INTO oauth_token (user_id, token, expires_at) 
+VALUES ('bot-001', 'xyz789', NOW() + INTERVAL 1 HOUR);
+```
+
+**¿Por qué MySQL?**
+- ✅ **Estándar FIWARE**: Keyrock está diseñado para MySQL (migración compleja a otros DBs)
+- ✅ **Transacciones ACID**: Tokens nunca se duplican (unique constraints)
+- ✅ **Replicación Master-Slave**: Alta disponibilidad sin pérdida de sesiones
+- ✅ **XACML Policies**: Permisos granulares (ej: "usuario X puede leer sensores de tipo Y")
+
+**Separación crítica**: ❌ Nunca almacenar tokens OAuth en PostgreSQL. Keyrock los gestiona con rotación automática y expiración.
+
+---
+
+### 1.2.1 ¿Por qué NO usar una sola base de datos?
+
+**Problema 1: Diferentes patrones de acceso**
+```
+PostgreSQL (transacciones):
+├─ Writes: Bajos (100/min) → Optimizado para consistencia
+└─ Reads: Medianos (500/min) → Queries complejos con JOINs
+
+MongoDB (gemelos digitales):
+├─ Writes: Altos (10,000/min) → Optimizado para throughput
+└─ Reads: Muy altos (50,000/min) → Queries simples sin JOINs
+```
+
+Si mezclamos en PostgreSQL:
+- ❌ Las 10,000 escrituras/min de sensores saturarían el WAL
+- ❌ Los queries complejos de auditoría competirían con lecturas de IoT
+- ❌ Lock contention: escrituras de sensores bloquearían lecturas de dashboard
+
+**Problema 2: Diferentes requisitos de backup**
+```
+PostgreSQL: Backup completo diario + WAL continuo (7 días retención)
+MongoDB: Snapshot cada 6 horas + oplog (24h retención) + TTL automático
+MySQL: Backup binlog cada hora (tokens no necesitan long-term storage)
+```
+
+**Problema 3: Diferentes modelos de escalado**
+```
+PostgreSQL: Escalado vertical (CPU/RAM más potente)
+MongoDB: Escalado horizontal (sharding por ubicación geográfica)
+MySQL: Replicación read-only para validación de tokens
+```
 
 ### 1.3 Flujo de Datos Completo
 
@@ -388,6 +486,331 @@ spec:
 ```
 
 **Comportamiento**: Si la CPU promedio supera 70%, K8s escala de 4 a 10 réplicas automáticamente.
+
+### 2.6 Guía Práctica de Migración: Docker Compose → Kubernetes
+
+#### Paso 1: Análisis del docker-compose.yml actual
+
+Antes de migrar, identifica qué componentes necesitan persistencia y cuáles son stateless:
+
+```bash
+# Componentes que requieren StatefulSets (datos persistentes):
+├─ mongo-db → StatefulSet (3 réplicas con MongoDB Replica Set)
+├─ mysql-db → StatefulSet (2 réplicas Master-Slave)
+
+# Componentes que usan Deployments (stateless, pueden reiniciar):
+├─ orion → Deployment (4 réplicas con HPA)
+├─ keyrock → Deployment (2 réplicas)
+├─ pep-proxy → Deployment (3 réplicas)
+├─ true-connector-ecc → Deployment (2 réplicas)
+└─ true-connector-data-app → Sidecar con ECC
+
+# Networking:
+├─ Services ClusterIP para discovery interno
+├─ Ingress para acceso externo HTTPS
+└─ NetworkPolicies para aislamiento de red
+```
+
+#### Paso 2: Estructura de directorios recomendada
+
+```
+k8s/
+├── 00-namespace.yaml
+├── 01-storage/
+│   ├── storageclass-fast-ssd.yaml
+│   ├── mongo-pvc.yaml
+│   └── mysql-pvc.yaml
+├── 02-secrets/
+│   ├── keyrock-db-secret.yaml
+│   ├── pep-proxy-secret.yaml
+│   └── true-connector-certs-secret.yaml
+├── 03-databases/
+│   ├── mongo-statefulset.yaml
+│   ├── mongo-service.yaml
+│   ├── mysql-statefulset.yaml
+│   └── mysql-service.yaml
+├── 04-fiware/
+│   ├── orion-deployment.yaml
+│   ├── orion-service.yaml
+│   ├── orion-hpa.yaml
+│   ├── keyrock-deployment.yaml
+│   ├── keyrock-service.yaml
+│   ├── pep-proxy-deployment.yaml
+│   └── pep-proxy-service.yaml
+├── 05-ids/
+│   ├── true-connector-deployment.yaml
+│   └── true-connector-service.yaml
+├── 06-networking/
+│   ├── ingress.yaml
+│   └── network-policies.yaml
+└── README.md
+```
+
+#### Paso 3: Migrar secrets de docker-compose a Kubernetes Secrets
+
+**❌ En docker-compose.yml (texto plano inseguro):**
+```yaml
+environment:
+  - PEP_PROXY_APP_ID=7a8b9c0d-1234-5678
+  - PEP_PROXY_PASSWORD=insecure_password  
+  - MYSQL_ROOT_PASSWORD=root123
+```
+
+**✅ En Kubernetes (encriptado en etcd):**
+```bash
+# Generar secrets seguros
+kubectl create secret generic pep-proxy-credentials \
+  --from-literal=app-id=$(uuidgen) \
+  --from-literal=password=$(openssl rand -base64 32) \
+  --namespace=fiware-prod
+
+kubectl create secret generic keyrock-db-credentials \
+  --from-literal=root-password=$(openssl rand -base64 32) \
+  --from-literal=user-password=$(openssl rand -base64 32) \
+  --namespace=fiware-prod
+```
+
+**Uso en manifests:**
+```yaml
+# k8s/04-fiware/pep-proxy-deployment.yaml
+env:
+- name: PEP_PROXY_APP_ID
+  valueFrom:
+    secretKeyRef:
+      name: pep-proxy-credentials
+      key: app-id
+- name: PEP_PROXY_PASSWORD
+  valueFrom:
+    secretKeyRef:
+      name: pep-proxy-credentials
+      key: password
+```
+
+#### Paso 4: Migrar datos de Docker volumes a PersistentVolumes
+
+**Backup de datos Docker:**
+```bash
+# 1. Backup MongoDB
+docker exec db-mongo mongodump --out /tmp/backup
+docker cp db-mongo:/tmp/backup ./mongo-backup-$(date +%Y%m%d)
+
+# 2. Backup MySQL
+docker exec db-mysql mysqldump -u root -p idm > mysql-backup-$(date +%Y%m%d).sql
+
+# 3. Comprimir backups
+tar -czf fiware-backup-$(date +%Y%m%d).tar.gz mongo-backup-* mysql-backup-*
+```
+
+**Restaurar en Kubernetes:**
+```bash
+# 1. Copiar backup al pod de MongoDB
+kubectl cp mongo-backup-20241201 mongo-orion-0:/tmp/backup -n fiware-prod
+
+# 2. Ejecutar restore
+kubectl exec -it mongo-orion-0 -n fiware-prod -- \
+  mongorestore --host mongo-orion-service /tmp/backup
+
+# 3. Verificar datos
+kubectl exec -it mongo-orion-0 -n fiware-prod -- \
+  mongosh --eval "db.entities.countDocuments()"
+```
+
+#### Paso 5: Configurar networking (Docker bridge → K8s Services)
+
+**Docker Compose:**
+```yaml
+networks:
+  data_space_net:
+    driver: bridge  # DNS interno: ping mongo-db
+```
+
+**Kubernetes equivalente:**
+```yaml
+# Namespace proporciona aislamiento (reemplaza Docker network)
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: fiware-prod
+---
+# Service proporciona DNS interno
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongo-orion-service
+  namespace: fiware-prod
+spec:
+  selector:
+    app: mongo-orion
+  ports:
+  - port: 27017
+    targetPort: 27017
+  clusterIP: None  # Headless para StatefulSet
+---
+# Ahora Orion puede conectar con:
+# mongodb://mongo-orion-service.fiware-prod.svc.cluster.local:27017/orion
+```
+
+#### Paso 6: Exponer servicios (Ports → Ingress)
+
+**Docker Compose (puertos expuestos al host):**
+```yaml
+ports:
+  - "3005:3005"  # Keyrock UI
+  - "1027:1027"  # PEP-Proxy
+  - "8080:8080"  # TRUE Connector
+```
+
+**Kubernetes (Ingress con TLS automático):**
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: fiware-ingress
+  namespace: fiware-prod
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/rate-limit: "1000"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  tls:
+  - hosts:
+    - api.procuredata.com
+    secretName: fiware-tls-cert  # Auto-generado por cert-manager
+  rules:
+  - host: api.procuredata.com
+    http:
+      paths:
+      - path: /orion
+        pathType: Prefix
+        backend:
+          service:
+            name: pep-proxy-service
+            port:
+              number: 1027
+      - path: /keyrock
+        pathType: Prefix
+        backend:
+          service:
+            name: keyrock-service
+            port:
+              number: 3005
+      - path: /connector
+        pathType: Prefix
+        backend:
+          service:
+            name: true-ecc-service
+            port:
+              number: 8080
+```
+
+**Ventajas del Ingress:**
+- ✅ SSL/TLS automático con Let's Encrypt
+- ✅ Rate limiting (1000 req/min por IP)
+- ✅ Path-based routing (múltiples servicios en un dominio)
+- ✅ Load balancing automático entre réplicas de pods
+
+#### Paso 7: Despliegue secuencial
+
+```bash
+# 1. Crear namespace
+kubectl apply -f k8s/00-namespace.yaml
+
+# 2. Configurar storage
+kubectl apply -f k8s/01-storage/
+
+# 3. Crear secrets
+kubectl apply -f k8s/02-secrets/
+
+# 4. Desplegar bases de datos (esperar a que estén Ready)
+kubectl apply -f k8s/03-databases/
+kubectl wait --for=condition=ready pod -l app=mongo-orion -n fiware-prod --timeout=300s
+kubectl wait --for=condition=ready pod -l app=mysql-keyrock -n fiware-prod --timeout=300s
+
+# 5. Restaurar datos (si es migración)
+kubectl cp mongo-backup-20241201 mongo-orion-0:/tmp/backup -n fiware-prod
+kubectl exec -it mongo-orion-0 -n fiware-prod -- mongorestore /tmp/backup
+
+# 6. Desplegar componentes FIWARE
+kubectl apply -f k8s/04-fiware/
+kubectl wait --for=condition=available deployment -l tier=fiware -n fiware-prod --timeout=300s
+
+# 7. Desplegar TRUE Connector
+kubectl apply -f k8s/05-ids/
+
+# 8. Configurar networking
+kubectl apply -f k8s/06-networking/
+
+# 9. Verificar todo
+kubectl get all -n fiware-prod
+```
+
+#### Paso 8: Validación post-migración
+
+```bash
+# 1. Verificar pods
+kubectl get pods -n fiware-prod
+# Todos deben estar en estado "Running" y "Ready 1/1"
+
+# 2. Test de conectividad interna
+kubectl run -it test-pod --image=busybox --rm -n fiware-prod -- sh
+# Dentro del pod:
+nslookup mongo-orion-service
+wget -O- http://orion-ld-service:1026/version
+wget -O- http://keyrock-service:3005/version
+
+# 3. Test de conectividad externa (Ingress)
+curl https://api.procuredata.com/orion/version
+curl https://api.procuredata.com/keyrock/version
+
+# 4. Verificar datos migrados
+kubectl exec -it mongo-orion-0 -n fiware-prod -- \
+  mongosh --eval "db.entities.find().limit(5).pretty()"
+
+# 5. Monitorear logs
+kubectl logs -f deployment/orion-ld -n fiware-prod
+kubectl logs -f deployment/pep-proxy -n fiware-prod
+```
+
+#### Paso 9: Rollback plan (si algo falla)
+
+```bash
+# Opción 1: Rollback a versión anterior de deployment
+kubectl rollout undo deployment/orion-ld -n fiware-prod
+
+# Opción 2: Eliminar todo y volver a Docker Compose
+kubectl delete namespace fiware-prod
+
+# Restaurar Docker Compose
+cd ~/procuredata-fiware
+docker compose down
+docker volume rm procuredata_mongo-db procuredata_mysql-db
+docker compose up -d
+# Restaurar backups
+docker exec -i db-mongo mongorestore /tmp/backup
+docker exec -i db-mysql mysql -u root -p idm < mysql-backup-20241201.sql
+```
+
+#### Comparativa: Antes vs Después
+
+| Aspecto | Docker Compose | Kubernetes |
+|---------|---------------|-----------|
+| **Despliegue inicial** | 5 minutos | 30 minutos (setup único) |
+| **Alta disponibilidad** | ❌ Single host | ✅ Multi-nodo |
+| **Auto-scaling** | ❌ Manual | ✅ HPA automático (2-10 réplicas) |
+| **SSL/TLS** | ❌ Manual (nginx externo) | ✅ Automático (cert-manager) |
+| **Secrets management** | ❌ Texto plano en .env | ✅ Encriptados en etcd |
+| **Health checks** | ❌ Restart manual | ✅ Liveness/Readiness probes |
+| **Rollback** | ❌ Redeploy completo | ✅ `kubectl rollout undo` |
+| **Backup** | ❌ Script manual | ✅ Velero automático |
+| **Monitoreo** | ❌ `docker stats` | ✅ Prometheus + Grafana |
+| **Networking** | ❌ Bridge básico | ✅ NetworkPolicies (Zero Trust) |
+| **Costo mensual** | $50 (1 VPS) | $270-462 (3-node cluster) |
+
+**Recomendación**: 
+- **Desarrollo/Testing**: Docker Compose
+- **Producción**: Kubernetes
+
+---
 
 ---
 
