@@ -10,6 +10,32 @@ import type {
 } from '@/types/fiware';
 
 /**
+ * URL del contexto JSON-LD maestro de PROCUREDATA v2
+ * 
+ * Este contexto define el vocabulario compartido para:
+ * - Logística y Transporte (Vehicle, DeliveryOrder, cargoWeight, speed)
+ * - Manufactura e IoT (Device, Machine, temperature, vibration)
+ * - Modelos de negocio de PROCUREDATA (DataAsset, Policy, usagePolicy)
+ * 
+ * Se aloja como archivo estático público para máxima disponibilidad.
+ * En producción, usar la URL del dominio deployado.
+ */
+export const PROCUREDATA_CONTEXT_URL = `${window.location.origin}/contexts/procuredata-context.jsonld`;
+
+/**
+ * Contextos estándar NGSI-LD de ETSI
+ */
+export const NGSI_LD_CORE_CONTEXT = 'https://uri.etsi.org/ngsi-ld/v1/ngsi-ld-core-context.jsonld';
+
+/**
+ * Array de contextos por defecto para todas las entidades PROCUREDATA
+ */
+export const DEFAULT_CONTEXTS = [
+  NGSI_LD_CORE_CONTEXT,
+  PROCUREDATA_CONTEXT_URL
+];
+
+/**
  * FIWARE API Service
  * Handles all communication with FIWARE Context Broker (Orion-LD),
  * Keyrock (Identity Management), and TRUE Connector (IDS)
@@ -87,15 +113,16 @@ class FiwareApiService {
 
   /**
    * Create a new NGSI-LD entity
+   * 
+   * Automatically includes PROCUREDATA context for semantic interoperability
    */
   async createEntity(entity: Partial<NgsiEntity>): Promise<FiwareApiResponse<void>> {
     const entityWithContext = {
       ...entity,
-      '@context': entity['@context'] || [
-        'https://uri.etsi.org/ngsi-ld/v1/ngsi-ld-core-context.jsonld',
-        'https://smartdatamodels.org/context.jsonld'
-      ]
+      '@context': entity['@context'] || DEFAULT_CONTEXTS
     };
+
+    console.log('[FIWARE API] Creating entity with PROCUREDATA context:', entityWithContext['@context']);
 
     return this.proxyRequest<void>(this.baseUrl, 'POST', entityWithContext);
   }
@@ -218,20 +245,31 @@ export const normalizeNgsiEntity = (entity: NgsiEntity): NormalizedEntity => {
 
 /**
  * Adapter: Convert flat JSON to NGSI-LD structure
+ * 
+ * Automatically includes PROCUREDATA context for semantic interoperability
  */
 export const toNgsiEntity = (data: Record<string, any>, type: string): Partial<NgsiEntity> => {
   const entity: any = {
     id: data.id || `urn:ngsi-ld:${type}:${Date.now()}`,
-    type
+    type,
+    '@context': DEFAULT_CONTEXTS
   };
 
   Object.keys(data).forEach(key => {
-    if (['id', 'type'].includes(key)) return;
+    if (['id', 'type', '@context'].includes(key)) return;
 
-    entity[key] = {
-      type: 'Property',
-      value: data[key]
-    };
+    // Handle GeoProperty (location with coordinates)
+    if (key === 'location' && data[key]?.type === 'Point') {
+      entity[key] = {
+        type: 'GeoProperty',
+        value: data[key]
+      };
+    } else {
+      entity[key] = {
+        type: 'Property',
+        value: data[key]
+      };
+    }
   });
 
   return entity;
